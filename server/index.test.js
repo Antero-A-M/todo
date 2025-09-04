@@ -7,39 +7,68 @@ import { hash } from "bcrypt";
 import jwt from "jsonwebtoken";
 import { pool } from "./helper/db.js";
 
-const BASE = "http://localhost:3001";
 const __dirname = import.meta.dirname;
+const BASE = `http://localhost:${process.env.PORT || 3001}`;
+
 
 const resetDb = () =>
   new Promise((resolve, reject) => {
-    const sql = fs.readFileSync(path.resolve(__dirname, "./db.sql"), "utf8");
-    pool.query(sql, (err) => (err ? reject(err) : resolve()));
+    try {
+      const sql = fs.readFileSync(path.resolve(__dirname, "./db.sql"), "utf8");
+      pool.query(sql, (err) => (err ? reject(err) : resolve()));
+    } catch (e) {
+      reject(e);
+    }
   });
 
-const insertUser = (email, password) =>
+
+const insertUser = (user) =>
   new Promise((resolve, reject) => {
-    hash(password, 10, (err, hashed) => {
+    hash(user.password, 10, (err, hashed) => {
       if (err) return reject(err);
       pool.query(
         "INSERT INTO account (email, password) VALUES ($1, $2) RETURNING *",
-        [email, hashed],
+        [user.email, hashed],
         (e, result) => (e ? reject(e) : resolve(result.rows[0]))
       );
     });
   });
 
-const makeToken = (email) => jwt.sign({ email }, process.env.JWT_SECRET);
+const signIn = async (user) => {
+  const res = await fetch(`${BASE}/user/signin`, {
+    method: "post",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user }),
+  });
+  return { status: res.status, data: await res.json() };
+};
 
+const makeToken = (email) => jwt.sign({ email }, process.env.JWT_SECRET);
+// --------------------------------------------------------------
 
 describe("Testing basic database functionality (with auth)", () => {
+  const user = { email: "foo2@test.com", password: "password123" };
+
   let token = null;
   let createdId = null;
 
   before(async () => {
     await resetDb();
+    await insertUser(user);
+    const { status, data } = await signIn(user);
+    if (status === 200 && data?.token) {
+      token = data.token;
+    } else {
+      token = makeToken(user.email);
+    }
+  });
 
-    const testUser = await insertUser("foo@test.com", "password123");
-    token = makeToken(testUser.email);
+  it("should log in", async () => {
+    const { status, data } = await signIn(user);
+
+    expect(status).to.equal(200);
+    expect(data).to.include.all.keys(["id", "email", "token"]);
+    expect(data.email).to.equal(user.email);
   });
 
   it("should get all tasks", async () => {
